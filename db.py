@@ -1,22 +1,63 @@
 import os
-from sqlmodel import Session, create_engine, SQLModel
-from fastapi import FastAPI, Depends
-from typing import Annotated
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+from model import Base, BookDB, BookCreate, BookUpdate
 
+load_dotenv()
 
-engine = create_engine()
+DATABASE_URL = os.getenv("DATABASE_URL") [cite: 1]
 
-def create_all_tables(app: FastAPI):
-    if os.getenv("ENV") == "dev":
-        SQLModel.metadata.create_all(engine)
-    yield
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-def get_session()->Session:
-    with Session(engine) as session:
-        yield session
+# Inicializar tablas (Solo crea 'books', ignorando dogs/stickers)
+Base.metadata.create_all(bind=engine)
 
+class BookRepository:
+    @staticmethod
+    def create(db: Session, book: BookCreate):
+        db_book = BookDB(**book.dict())
+        db.add(db_book)
+        db.commit()
+        db.refresh(db_book)
+        return db_book
 
+    @staticmethod
+    def find_all(db: Session):
+        return db.query(BookDB).all()
 
-SessionDep = Annotated[Session, Depends(get_session)]
+    @staticmethod
+    def find_one(db: Session, book_id: int):
+        return db.query(BookDB).filter(BookDB.id == book_id).first()
 
+    @staticmethod
+    def find_by_author(db: Session, author: str):
+        return db.query(BookDB).filter(BookDB.author.ilike(f"%{author}%")).first()
+
+    @staticmethod
+    def update(db: Session, book_id: int, book_data: BookUpdate):
+        db_query = db.query(BookDB).filter(BookDB.id == book_id)
+        db_book = db_query.first()
+        if db_book:
+            update_data = book_data.dict(exclude_unset=True)
+            db_query.update(update_data)
+            db.commit()
+            db.refresh(db_book)
+        return db_book
+
+    @staticmethod
+    def delete(db: Session, book_id: int):
+        db_book = db.query(BookDB).filter(BookDB.id == book_id).first()
+        if db_book:
+            db.delete(db_book)
+            db.commit()
+            return True
+        return False
